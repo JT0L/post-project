@@ -1,0 +1,155 @@
+# -*- coding: utf-8 -*-
+from selenium import webdriver
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+import time
+from libraries import postpy as postpy
+from libraries import reading_and_saving as rs
+
+size_of_package = 30
+INPUT_FILE_NAME = ""
+OUTPUT_FILE_NAME = ""
+DRIVER_PATH = ""
+LINK = "https://www.google.pl/maps/dir/Warszawa/Kielce/@51.0773044,20.9078341,8.5z/data=!4m14!4m13!1m5!1m1!1s0x471ecc669a869f01:0x72f0be2a88ead3fc!2m2!1d21.0122287!2d52.2296756!1m5!1m1!1s0x47178818af891105:0x5025d8b8c0cdcdf3!2m2!1d20.6285676!2d50.8660773!3e0"
+
+
+def save_data_file(list_of_letters_to_process, INPUT_FILE_NAME):
+    i = 0
+    input_file = open(INPUT_FILE_NAME, 'w', encoding = 'utf-8')
+    for letter in list_of_letters_to_process:
+        if(i >= size_of_package): # leaving only these not used
+            line = letter.to_file()
+            input_file.write(line)
+            input_file.write('\n')
+        i += 1
+    input_file.close()
+
+
+def save_processed_data(list_of_processed_letters):
+    output_file = open(OUTPUT_FILE_NAME, "a", encoding = 'utf-8')
+    for processed_letter in list_of_processed_letters:
+        line = processed_letter.to_file()
+        output_file.write(line)
+        output_file.write('\n')
+    output_file.close()
+
+
+def read_data_file(INPUT_FILE_NAME, list_of_letters_to_process):
+    input_file = open(INPUT_FILE_NAME, 'r', encoding = 'utf-8')
+    input_data = input_file.read()
+    input_data = input_data[:-1]
+    input_table = input_data.split('\n')
+    input_file.close()
+
+    for record in input_table:
+        list_from_record = record.split(';')
+
+        if(list_from_record[1] != 'nie doszedl'):
+            letter = postpy.Letter(rs.split_data(list_from_record[0]), rs.split_data(list_from_record[1]), list_from_record[2], list_from_record[3], list_from_record[4], list_from_record[5], list_from_record[7], list_from_record[6])
+            list_of_letters_to_process.append(letter)
+
+
+
+def send_route(miejsce_wysylki, miejsce_celu, fields):
+    start_field = fields[0]
+    start_field.clear()
+    start_field.send_keys(miejsce_wysylki)
+
+    destination_field = fields[1]
+    destination_field.clear()
+    destination_field.send_keys(miejsce_celu)
+            
+    destination_field.send_keys(Keys.RETURN)
+    print(miejsce_wysylki)
+    print(miejsce_celu)
+
+    time.sleep(0.4)
+
+
+def click_through_initial_screen(driver):
+    agr1 = WebDriverWait(driver, 5).until(
+        EC.presence_of_element_located((By.CLASS_NAME, "AIC7ge"))
+    )
+
+    agreement_button = agr1.find_elements_by_tag_name("button")
+    agreement_button[1].click()
+
+
+def get_time_and_distance(driver):
+    block = WebDriverWait(driver, 6).until(
+        EC.presence_of_element_located((By.CLASS_NAME, "section-directions-trip-numbers"))
+    )
+
+    time_block = block.find_element_by_tag_name("span")
+    trip_time = time_block.text
+
+    distance_tab = block.find_elements_by_tag_name("div")
+    distance = distance_tab[1].text
+
+    return trip_time, distance
+
+
+def add_processed_letter(list_of_processed_letters, letter, trip_time = 0, distance = 0):
+    processed_letter = postpy.Letter_ext(letter.data_wyslania, letter.data_dotarcia, letter.miejsce_wysylki, letter.miejsce_celu, letter.typ, letter.numer_przesylki, letter.ilosc_dni_roboczych, letter.on_time, trip_time, distance)
+    list_of_processed_letters.append(processed_letter)
+
+
+def main():
+    list_of_letters_to_process = []
+    list_of_processed_letters = []
+
+
+    read_data_file(INPUT_FILE_NAME, list_of_letters_to_process)
+    save_data_file(list_of_letters_to_process, INPUT_FILE_NAME)
+
+
+    driver = webdriver.Chrome(DRIVER_PATH)
+    driver.get(LINK)
+
+    click_through_initial_screen(driver)
+
+
+    i = 0
+    for letter in list_of_letters_to_process:
+        
+        if(i >= size_of_package):
+            save_processed_data(list_of_processed_letters)
+            break
+
+        i += 1
+        try:
+            fields = driver.find_elements_by_class_name("tactile-searchbox-input")
+
+            table_of_start_point = letter.miejsce_wysylki.split()
+            table_of_destination_point = letter.miejsce_celu.split()
+
+            if(table_of_start_point[1] == table_of_destination_point[1]): # the same place
+                add_processed_letter(list_of_processed_letters, letter)
+                continue
+
+            send_route(letter.miejsce_wysylki, letter.miejsce_celu, fields)
+
+            try: # try getting time and distance
+                trip_time, distance = get_time_and_distance(driver)
+                add_processed_letter(list_of_processed_letters, letter, trip_time, distance)
+
+            except: # if we have not found time it means that route was not found by google maps, so next we will try less precise search
+                try:
+                    send_route(table_of_start_point[1], table_of_destination_point[1], fields)
+                    time.sleep(0.4)
+
+                    trip_time, distance = get_time_and_distance(driver)
+                    add_processed_letter(list_of_processed_letters, letter, trip_time, distance)
+
+                except: # if even with this less precise search route was not found, we will drop that letter
+                    continue
+
+        except:
+            continue
+
+    driver.quit()
+
+if __name__ == "__main__":
+    main()
